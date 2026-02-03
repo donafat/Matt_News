@@ -1,9 +1,9 @@
 import os
 import time
 import requests
-import feedparser # RSS 파싱 라이브러리
+import feedparser
 from datetime import datetime, timedelta
-from dateutil import parser # 날짜 변환용
+from dateutil import parser
 
 # =========================================================
 # 1. 설정 (형님의 관심사 키워드)
@@ -16,19 +16,19 @@ KEYWORDS = [
     "전기차 보조금",
     "파이썬 자동화"
 ]
-
-# 몇 시간 전 뉴스까지 가져올지 설정 (매일 2번 실행한다면 12시간 추천)
 TIME_LIMIT_HOURS = 12 
 
 # =========================================================
-# 2. 텔레그램 전송 함수
+# 2. 텔레그램 전송 함수 (에러 확인 강화판)
 # =========================================================
 def send_telegram(message):
     token = os.environ.get('NEW_TELEGRAM_TOKEN')
     chat_id = os.environ.get('NEW_CHAT_ID')
     
+    print(f"🔑 토큰 앞자리 확인: {token[:5]}..." if token else "❌ 토큰 없음")
+    print(f"🆔 채팅ID 확인: {chat_id}" if chat_id else "❌ 채팅ID 없음")
+
     if not token or not chat_id:
-        print("❌ 토큰이나 채팅방 ID가 없습니다.")
         return
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -36,49 +36,54 @@ def send_telegram(message):
         'chat_id': chat_id, 
         'text': message, 
         'parse_mode': 'Markdown',
-        'disable_web_page_preview': 'true' # 링크 미리보기 끔 (깔끔하게)
+        'disable_web_page_preview': 'true'
     }
+    
     try:
-        requests.post(url, data=data)
+        response = requests.post(url, data=data)
+        # 여기가 핵심! 성공/실패 여부를 확실히 출력
+        if response.status_code == 200:
+            print("✅ 텔레그램 전송 성공! (핸드폰 확인하세요)")
+        else:
+            print(f"❌ 전송 실패 (에러코드: {response.status_code})")
+            print(f"❌ 에러 내용: {response.text}")
     except Exception as e:
-        print(f"전송 실패: {e}")
+        print(f"❌ 연결 에러: {e}")
 
 # =========================================================
 # 3. 구글 뉴스 RSS 검색 함수
 # =========================================================
 def get_google_news(keyword):
-    # 구글 뉴스 RSS 주소 (한국어 설정)
     encoded_keyword = requests.utils.quote(keyword)
     rss_url = f"https://news.google.com/rss/search?q={encoded_keyword}&hl=ko&gl=KR&ceid=KR:ko"
-    
     feed = feedparser.parse(rss_url)
     news_list = []
     
-    # 현재 시간 기준 설정
-    now = datetime.now().astimezone() 
+    # 시간대 처리 (timezone 에러 방지)
+    now = datetime.now().astimezone()
     limit_time = now - timedelta(hours=TIME_LIMIT_HOURS)
 
     print(f"🔍 [{keyword}] 검색 중...")
 
-    for entry in feed.entries[:10]: # 키워드당 최대 10개만 확인
+    for entry in feed.entries[:10]:
         try:
-            # 기사 발행 시간 파싱
-            pub_date = parser.parse(entry.published)
-            
-            # 지정한 시간(예: 12시간) 이내의 기사만 통과
-            if pub_date >= limit_time:
-                title = entry.title
-                link = entry.link
+            # 날짜 형식이 제각각일 수 있어 예외처리 추가
+            if hasattr(entry, 'published'):
+                pub_date = parser.parse(entry.published)
+                # timezone 정보가 없으면 강제로 할당
+                if pub_date.tzinfo is None:
+                    pub_date = pub_date.replace(tzinfo=now.tzinfo)
                 
-                # 출처(신문사)가 제목에 있으면 깔끔하게 정리
-                if "-" in title:
-                    source = title.split("-")[-1].strip()
-                    title = title.rsplit("-", 1)[0].strip()
-                else:
-                    source = "뉴스"
-
-                news_list.append(f"• [{source}] [{title}]({link})")
-        except:
+                if pub_date >= limit_time:
+                    title = entry.title
+                    link = entry.link
+                    if "-" in title:
+                        source = title.split("-")[-1].strip()
+                        title = title.rsplit("-", 1)[0].strip()
+                    else:
+                        source = "뉴스"
+                    news_list.append(f"• [{source}] [{title}]({link})")
+        except Exception as e:
             continue
             
     return news_list
@@ -100,14 +105,11 @@ if __name__ == "__main__":
             full_message += "\n".join(articles)
             full_message += "\n\n"
             has_news = True
-        else:
-            print(f"  -> '{keyword}' 관련 새 뉴스 없음")
 
     full_message += "------------------\n💡 Google News 기반"
 
     if has_news:
-        print("✅ 뉴스 있음, 전송 중...")
-        # 메시지가 너무 길면 나눠서 보내기 (텔레그램 제한 대비)
+        print("✅ 뉴스 발견! 전송 시도...")
         if len(full_message) > 4000:
             send_telegram(full_message[:4000])
             send_telegram(full_message[4000:])
@@ -115,5 +117,3 @@ if __name__ == "__main__":
             send_telegram(full_message)
     else:
         print("📭 새로운 뉴스가 없습니다.")
-        # (선택) 뉴스 없어도 알림 받고 싶으면 아래 주석 해제
-        # send_telegram(f"📭 {today}\n지정된 키워드의 새로운 뉴스가 없습니다.")
