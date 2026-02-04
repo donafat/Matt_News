@@ -118,7 +118,7 @@ if __name__ == "__main__":
             full_message += "\n".join(articles)
             full_message += "\n\n"
             has_news = True
-
+        time.sleep(2)
     full_message += "------------------\n💡 Google News 기반"
 
     if has_news:
